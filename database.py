@@ -56,10 +56,11 @@ async def search_query(query):
         results = []
         for word in words:
             async with db.execute(
-                "SELECT relevant_url, origin_url, depth FROM search_index WHERE word = ?", 
+                
+                "SELECT relevant_url, origin_url, depth FROM search_index WHERE word = ? ORDER BY depth ASC", 
                 (word,)
             ) as cursor:
                 rows = await cursor.fetchall()
                 results.extend(rows)
-        # Basit bir frequency (frekans) siralamasi yapilabilir ama simdilik direkt donuyoruz
+       
         return list(set(results))

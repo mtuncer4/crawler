@@ -1,14 +1,30 @@
 import asyncio
 import aiohttp
-from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import re
+from html.parser import HTMLParser
 from database import is_visited, mark_visited, save_index
 
+
+class NativeHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.text_content = []
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'a':
+            for attr in attrs:
+                if attr[0] == 'href':
+                    self.links.append(attr[1])
+
+    def handle_data(self, data):
+        self.text_content.append(data)
+
 class WebCrawler:
-    def __init__(self, max_concurrent_workers=10, max_queue_size=1000):
+    def __init__(self, max_concurrent_workers=10):
         self.max_workers = max_concurrent_workers
-        self.max_queue_size = max_queue_size
+        self.max_queue_size = 1000 # Başlangıç değeri, start_crawl içinde kullanıcı değeriyle ezilecek
         self._queue = None  
         self.is_running = False
         self.active_workers = 0
@@ -63,23 +79,29 @@ class WebCrawler:
                 
                 html_content = await self.fetch_page(session, current_url)
                 if html_content:
-                    soup = BeautifulSoup(html_content, 'html.parser')
-                    
-                    text_content = soup.get_text(separator=' ')
-                    words = set(self.extract_words(text_content))
-                    for word in words:
-                        await save_index(word, current_url, origin_url, current_depth)
-                    
-                    self.indexed_pages += 1
+                    try:
+                        # ZIRH: Parser işlemleri try bloğu içine alındı, bozuk HTML sistemi çökertemez
+                        parser = NativeHTMLParser()
+                        parser.feed(html_content)
+                        
+                        text_content = ' '.join(parser.text_content)
+                        words = set(self.extract_words(text_content))
+                        for word in words:
+                            await save_index(word, current_url, origin_url, current_depth)
+                        
+                        self.indexed_pages += 1
 
-                    if current_depth < max_depth:
-                        for link in soup.find_all('a', href=True):
-                            next_url = urljoin(current_url, link['href'])
-                            if self.is_valid_url(next_url) and not await is_visited(next_url):
-                                try:
-                                    self.queue.put_nowait((next_url, origin_url, current_depth + 1))
-                                except asyncio.QueueFull:
-                                    pass 
+                        if current_depth < max_depth:
+                            for link in parser.links:
+                                next_url = urljoin(current_url, link)
+                                if self.is_valid_url(next_url) and not await is_visited(next_url):
+                                    try:
+                                        self.queue.put_nowait((next_url, origin_url, current_depth + 1))
+                                    except asyncio.QueueFull:
+                                        pass 
+                    except Exception as e:
+                        # Eğer HTML çok bozuksa atla, Worker çalışmaya devam etsin
+                        print(f"UYARI: Bozuk HTML yapisi atlandi ← {current_url}")
 
                 self.queue.task_done()
             except asyncio.CancelledError:
@@ -95,12 +117,13 @@ class WebCrawler:
             self.is_running = True
             self.indexed_pages = 0
             
-            # Eski kuyrugu silip kullanicinin istedigi kapasitede yepyeni bir kuyruk yaratiyoruz
-            self.max_queue_size = queue_capacity
+            # Kullanıcının arayüzden girdiği dinamik Queue Capacity (Back Pressure)
+            self.max_queue_size = int(queue_capacity)
             self._queue = asyncio.Queue(maxsize=self.max_queue_size)
                 
             await self.queue.put((origin, origin, 0))
             print("\n>>> Sistem tetiklendi, Worker'lar basliyor... <<<")
+            
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
@@ -123,5 +146,5 @@ class WebCrawler:
             print(f"KRITIK HATA: {e}")
             self.is_running = False
 
-# En kritik satir: Uygulamanin aradigi instance
+
 crawler_instance = WebCrawler()
