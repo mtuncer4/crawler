@@ -1,0 +1,11 @@
+# Database
+*.db
+*.sqlite3
+crawler.db-journal
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# OS Files
+.DS_Store
